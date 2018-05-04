@@ -1,0 +1,371 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+```{r, message=FALSE, warning=FALSE}
+library(R.utils)
+library(seqinr)
+library(tidyverse)
+library(RSQLite)
+```
+
+# Store the URLs of the location of each organisms CDS FASTA file within Ensembl's FTP website
+```{r}
+Ecoli_ensembl_ftp_url <- "ftp://ftp.ensemblgenomes.org/pub/bacteria/release-38/fasta/bacteria_0_collection/escherichia_coli_str_k_12_substr_mg1655/cds/Escherichia_coli_str_k_12_substr_mg1655.ASM584v2.cds.all.fa.gz"
+
+Celegans_ensembl_ftp_url <- "ftp://ftp.ensembl.org/pub/release-92/fasta/caenorhabditis_elegans/cds/Caenorhabditis_elegans.WBcel235.cds.all.fa.gz"
+
+Schizosaccharomyces_pombe_ensembl_ftp_url <- "ftp://ftp.ensemblgenomes.org/pub/release-39/fungi/fasta/schizosaccharomyces_pombe/cds/Schizosaccharomyces_pombe.ASM294v2.cds.all.fa.gz"
+```
+
+# Download the gzip compressed files from the Ensembl FTP website and store them in current
+# working directory with associated names
+```{r}
+Ecoli_ensembl_zip <-
+  curl::curl_download(Ecoli_ensembl_ftp_url,
+                                         "ecoli_fasta.gz")
+
+Schizosaccharomyces_pombe_ensembl_zip <-
+  curl::curl_download(Schizosaccharomyces_pombe_ensembl_ftp_url,
+                      "schizosaccharomyces_pombe_fasta.gz")
+
+Celegans_ensembl_zip <-
+  curl::curl_download(Celegans_ensembl_ftp_url,
+                                            "celegans_fasta.gz")
+```
+
+# Unzip each file downloaded from previous step
+```{r}
+gunzip("ecoli_fasta.gz", "ecoli.fasta")
+
+gunzip("schizosaccharomyces_pombe_fasta.gz", "schizosaccharomyces_pombe.fasta")
+
+gunzip("celegans_fasta.gz", "celegans.fasta")
+```
+
+# Assign a variable for each organism to to store a list of all CDSs as strings using 
+# seqinr::read.fasta() function
+```{r}
+ecoli_cds <-
+  read.fasta("ecoli.fasta", as.string = TRUE, seqonly = TRUE)
+
+schizosaccharomyces_pombe_cds <- 
+  read.fasta("schizosaccharomyces_pombe.fasta", as.string = TRUE, seqonly = TRUE)
+
+celegans_cds <-
+  read.fasta("celegans.fasta", as.string = TRUE, seqonly = TRUE)
+```
+
+
+# Create a data frame containing the organism's name, genome size, total CDS, and taxonomy
+```{r}
+organism_overview <- tibble(
+  "OrganismName" = c("E. coli K-12",
+                     "Schizosaccharomyces pombe",
+                     "C. elegans"),
+  "GenomeSize" = c(4639221,
+                   12462637,
+                   100258171),
+  "TotalCDS" = c(length(ecoli_cds),
+                 length(schizosaccharomyces_pombe_cds),
+                 length(celegans_cds)),    
+  "Taxonomy" = c("Bacteria",
+                 "Fungi",
+                 "Animalia")
+)
+```
+
+# Create CDS ID for each unique CDS string for each organism, these will be used as a primary 
+# key for each following organism CDS Information tables
+```{r,}
+ecoli_cds_id <- tibble(
+  "initials" = rep("ec",length(ecoli_cds)),
+  "cds number" = c(1:length(ecoli_cds))
+)
+
+schizosaccharomyces_pombe_cds_id <- tibble(
+  "initials" = rep("sp",length(schizosaccharomyces_pombe_cds)),
+  "cds number" = c(1:length(schizosaccharomyces_pombe_cds))
+)
+
+celegans_cds_id <- tibble(
+  "initials" = rep("ce",length(celegans_cds)),
+  "cds number" = c(1:length(celegans_cds))
+)
+```
+
+# Create data frames containing the organism's name, the CDS string, and the associated CDS ID
+```{r}
+ecoli_cds_information <- tibble(
+  "OrganismName" =
+    rep(organism_overview$OrganismName[1], length(ecoli_cds)),
+  "CDSID" = 
+    paste(ecoli_cds_id$initials,
+          ecoli_cds_id$`cds number`, sep = ""),
+  "CDS" = c(unlist(ecoli_cds[1:length(ecoli_cds)]))
+)
+
+schizosaccharomyces_pombe_cds_information <- tibble(
+  "OrganismName" =
+    rep(organism_overview$OrganismName[2], length(schizosaccharomyces_pombe_cds)),
+  "CDSID" =
+    paste(schizosaccharomyces_pombe_cds_id$initials,
+          schizosaccharomyces_pombe_cds_id$`cds number`, sep = ""),
+  "CDS" = c(unlist(schizosaccharomyces_pombe_cds[1:length(schizosaccharomyces_pombe_cds)]))
+)
+
+celegans_cds_information <- tibble(
+  "OrganismName" =
+    rep(organism_overview$OrganismName[3], length(celegans_cds)),
+  "CDSID" = 
+    paste(celegans_cds_id$initials,
+          celegans_cds_id$`cds number`, sep = ""),
+  "CDS" = c(unlist(celegans_cds[1:length(celegans_cds)]))
+)
+```
+
+# Create a SQLite database and store the organism_overview, ecoli_cds_information, 
+# schizosaccharomyces_pombe_cds_information, and celegans_cds_information tables created in 
+# previous steps
+```{r}
+db <- dbConnect(SQLite(), dbname = "coding_DNA_sequences.sqlite")
+
+dbWriteTable(conn = db,
+             name = "Organism_Overview",
+             value = organism_overview,
+             row.names = FALSE,
+             overwrite = TRUE
+)
+
+dbWriteTable(conn = db,
+             name = "Ecoli_CDS_Information",
+             value = ecoli_cds_information,
+             row.names = FALSE,
+             overwrite = TRUE
+)
+
+dbWriteTable(conn = db,
+             name = "Schizosaccharomyces_Pombe_CDS_Information",
+             value = schizosaccharomyces_pombe_cds_information,
+             row.names = FALSE,
+             overwrite = TRUE
+)
+
+dbWriteTable(conn = db,
+             name = "Celegans_CDS_Information",
+             value = celegans_cds_information,
+             row.names = FALSE,
+             overwrite = TRUE
+)
+```
+
+# Query the newly created database in order to retreive the CDS sequences for each organism
+# then assign this to a variable
+```{r, warning=FALSE}
+ecoli_query <- dbSendQuery(db,
+  "SELECT [CDS]
+  FROM Ecoli_CDS_Information"
+)
+
+ecoli_cds_strings <- dbFetch(ecoli_query)
+
+
+schizosaccharomyces_pombe_query <- dbSendQuery(db,
+  "SELECT [CDS]
+  FROM Schizosaccharomyces_Pombe_CDS_Information"
+)
+
+schizosaccharomyces_pombe_cds_strings <- dbFetch(schizosaccharomyces_pombe_query)
+
+celegans_query <- dbSendQuery(db,
+  "SELECT [CDS]
+  FROM Celegans_CDS_Information"
+)
+
+celegans_cds_strings <- dbFetch(celegans_query)
+```
+
+# Separate each CDS string into the individual codons that make up each sequence then store
+# each codon in one vector
+```{r}
+ecoli_cds_codons <- 
+  str_extract_all(ecoli_cds_strings, "[ATGC]{3}", simplify = TRUE) %>%
+  as.vector()
+
+schizosaccharomyces_pombe_cds_codons <- 
+  str_extract_all(schizosaccharomyces_pombe_cds_strings, "[ATGC]{3}", simplify = TRUE) %>%
+  as.vector()
+
+# This takes ~2 minutes on average
+celegans_cds_codons <- 
+  str_extract_all(celegans_cds_strings, "[ATGC]{3}", simplify = TRUE) %>%
+  as.vector()
+```
+
+# Plot the total count of each occurance of all unique codons for all organisms
+```{r}
+# E. coli K-12
+ggplot() +
+  geom_bar(aes(ecoli_cds_codons)) +
+  labs(title = "E. coli K-12 Codons", x = "Codons") +
+  theme(axis.line = element_line(size = 0.5),
+        panel.background = element_rect(fill = NA, size = rel(20)),
+        panel.grid.minor = element_line(color = NA),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 15)) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  coord_flip()
+```
+
+```{r}
+# Schizosaccharomyces pombe
+ggplot() +
+  geom_bar(aes(schizosaccharomyces_pombe_cds_codons)) +
+  labs(title = "Schizosaccharomyces pombe Codons", x = "Codons") +
+  theme(axis.line = element_line(size = 0.5),
+        panel.background = element_rect(fill = NA, size = rel(20)),
+        panel.grid.minor = element_line(color = NA),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 12)) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  coord_flip()
+```
+
+```{r}
+# C. elegans
+ggplot() +
+  geom_bar(aes(celegans_cds_codons)) +
+  labs(title = "C. elegans Codons", x = "Codons") +
+  theme(axis.line = element_line(size = 0.5),
+        panel.background = element_rect(fill = NA, size = rel(20)),
+        panel.grid.minor = element_line(color = NA),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 15)) + 
+  scale_y_continuous(expand = c(0,0)) + 
+  coord_flip()
+```
+
+# Create a vector that contains all possible codons that grouped by what amino acid they are
+# associated with
+```{r}
+possible_codons <- c(
+  "ATT","ATC","ATA",
+  "CTT","CTC","CTA","CTG","TTA","TTG",
+  "GTT","GTC","GTA","GTG",
+  "TTT","TTC",
+  "ATG",
+  "TGT","TGC",
+  "GCT","GCC","GCA","GCG",
+  "GGT","GGC","GGA","GGG",
+  "CCT","CCC","CCA","CCG",
+  "ACT","ACC","ACA","ACG",
+  "TCT","TCC","TCA","TCG","AGT","AGC",
+  "TAT","TAC",
+  "TGG",
+  "CAA","CAG",
+  "AAT","AAC",
+  "CAT","CAC",
+  "GAA","GAG",
+  "GAT","GAC",
+  "AAA","AAG",
+  "CGT","CGC","CGA","CGG","AGA","AGG",
+  "TAA","TAG","TGA")
+
+corresponding_amino_acid <- c(
+  rep("Isoleucine", 3),
+  rep("Leucine", 6),
+  rep("Valine", 4),
+  rep("Phenylalanine", 2),
+  "Methionine",
+  rep("Cysteine", 2),
+  rep("Alanine", 4),
+  rep("Glycine", 4),
+  rep("Proline", 4),
+  rep("Threonine", 4),
+  rep("Serine", 6),
+  rep("Tyrosine", 2),
+  "Tryptophan",
+  rep("Glutamine", 2),
+  rep("Asparagine", 2),
+  rep("Histidine", 2),
+  rep("Glutamic acid", 2),
+  rep("Aspartic acid", 2),
+  rep("Lysine", 2),
+  rep("Arginine", 6),
+  rep("Stop codon", 3)
+)
+```
+
+# Create a function that counts all the occurances of each possible codon and stores these 
+# values in a vector then call the function using the variables that hold all codons for the 
+# CDSs of each organism
+```{r}
+count_codons <- function(all_codons) {
+  count_of_each <- integer()
+  for (i in 1:64){
+    count_of_each[i] <-  sum(str_count(all_codons, string = possible_codons[i]))
+    print(count_of_each[i])
+  }
+  return(count_of_each)
+}
+
+# Takes ~6 minutes
+ecoli_codon_count <- count_codons(ecoli_cds_codons)
+
+# Takes ~10 minutes
+schizosaccharomyces_pombe_codon_count <- count_codons(schizosaccharomyces_pombe_cds_codons)
+
+# Takes over 1 hour to complete, therefore I have commented out to ensure it will only be ran
+# if necessary
+celegans_codon_count <- count_codons(celegans_cds_codons)
+```
+
+# Create a table that includes all possible codons and how many occurances of that codon appear
+# in each organism
+```{r}
+ecoli_possible_codons_count <- tibble(
+  "Possible Codons" = possible_codons,
+  "Count" = ecoli_codon_count,
+  "Amino Acid" = corresponding_amino_acid
+)
+
+schizosaccharomyces_pombe_possible_codons_count <- tibble(
+  "Possible Codons" = possible_codons,
+  "Count" = schizosaccharomyces_pombe_codon_count,
+  "Amino Acid" = corresponding_amino_acid
+)
+
+celegans_possible_codons_count <- tibble(
+  "Possible Codons" = possible_codons,
+  "Count" = celegans_codon_count,
+  "Amino Acid" = corresponding_amino_acid
+)
+```
+
+# Filter the possible codon count tables to show frequency bias for specific amino acids
+```{r}
+ecoli_possible_codons_count %>% filter(`Amino Acid` == "Isoleucine")
+```
+
+```{r}
+schizosaccharomyces_pombe_possible_codons_count %>% filter(`Amino Acid` == "Isoleucine")
+```
+
+```{r}
+celegans_possible_codons_count %>% filter(`Amino Acid` == "Isoleucine")
+```
+
+```{r}
+ecoli_possible_codons_count %>% filter(`Amino Acid` == "Arginine")
+```
+
+```{r}
+schizosaccharomyces_pombe_possible_codons_count %>% filter(`Amino Acid` == "Arginine")
+```
+
+```{r}
+celegans_possible_codons_count %>% filter(`Amino Acid` == "Arginine")
+```
+
